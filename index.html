@@ -46,7 +46,7 @@ button.pri{background:var(--la);color:#000}
     <div class="pk">Maior valor até agora: <span id="pk">0</span></div>
     <div class="g2">
       <button id="bZera">Zerar maior</button>
-      <button id="bFone">🎧 Fone: off</button>
+      <button id="bFone">🎧 Ouvir (SÓ com fone): off</button>
     </div>
     <div class="g2"><button id="bRecal">Recalibrar</button><button id="bPausa">Pausar</button></div>
   </div>
@@ -107,7 +107,7 @@ $('bCal').onclick=calibrar;
 $('bRecal').onclick=()=>{$('painel').style.display='none';$('bCal').style.display='block';$('s1').className='step at';$('s2').className='step';$('s3').className='step';fundo=null;calibrar()};
 $('bZera').onclick=()=>{pico=0;$('pk').textContent='0'};
 $('bPausa').onclick=()=>{pausa=!pausa;$('bPausa').textContent=pausa?'Continuar':'Pausar'};
-$('bFone').onclick=()=>{if(!ac)return;fone=!fone;mon.gain.value=fone?6:0;$('bFone').textContent='🎧 Fone: '+(fone?'ON':'off')};
+$('bFone').onclick=()=>{if(!ac)return;fone=!fone;mon.gain.value=fone?2:0;$('bFone').textContent='🎧 Ouvir (SÓ com fone): '+(fone?'ON':'off')};
 </script>
 </body>
 </html>
