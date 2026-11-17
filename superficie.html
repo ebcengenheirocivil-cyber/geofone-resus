@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>RESUS ENGENHARIA — Realce de Superfície</title>
+<meta name="theme-color" content="#000000">
+<style>
+:root{--ci:#545454;--la:#F9A136}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Montserrat,"Segoe UI",Arial,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
+header{position:fixed;top:0;left:0;right:0;height:50px;border-bottom:3px solid var(--la);display:flex;align-items:center;padding:0 10px;background:#000;z-index:3}
+.brand{font-weight:800;font-size:13px}.brand b{color:var(--la)}.brand small{display:block;font-weight:400;font-size:9px;color:#bbb;letter-spacing:1px}
+#out{position:fixed;top:53px;left:0;width:100%;height:calc(100% - 53px - 168px);object-fit:contain;background:#000;touch-action:none}
+#ctrl{position:fixed;left:0;right:0;bottom:0;height:168px;background:#000;border-top:1px solid #222;padding:8px;z-index:3}
+.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+button{font-family:inherit;border:0;border-radius:8px;padding:10px 4px;font-size:12px;font-weight:700;background:var(--ci);color:#fff}
+button.on,button.pri{background:var(--la);color:#000}
+.sl{display:flex;align-items:center;gap:8px;font-size:11px;color:#ccc;margin-top:8px}
+.sl input{flex:1;accent-color:var(--la)}
+.sl span{width:84px}
+.row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+#start{position:fixed;inset:53px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:20px;background:#000;z-index:5;text-align:center}
+#start p{font-size:13px;color:#ccc;line-height:1.5;max-width:420px}
+#start button{width:min(320px,90vw);padding:16px;font-size:15px}
+#info{position:fixed;top:58px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.8);border:1px solid var(--la);border-radius:14px;padding:4px 10px;font-size:11px;z-index:4;pointer-events:none;white-space:nowrap}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header><div class="brand">RESUS <b>ENGENHARIA</b><small>REALCE DE SUPERFÍCIE · PISTAS DE TUBULAÇÃO</small></div></header>
+<div id="start">
+  <p><b style="color:#F9A136">O que este app faz:</b> realça no piso e na parede as <b>pistas visíveis</b> de onde passou tubulação: faixas remendadas, rejunte ou peças diferentes em linha, manchas de umidade e trincas lineares.</p>
+  <p>Ele <b>não enxerga através do piso</b>. Use o resultado como indício e confirme antes de cortar.</p>
+  <button class="pri" id="bCam">📷 Abrir câmera</button>
+  <button id="bFoto">🖼 Analisar uma foto</button>
+  <p style="font-size:11px">Dica: boa luz, de preferência <b>lanterna rasante</b> (luz deitada, quase paralela ao piso), filmando de cima e de pé.</p>
+</div>
+<video id="vid" playsinline muted autoplay style="display:none"></video>
+<canvas id="out"></canvas>
+<div id="info">Remendos / contraste</div>
+<div id="ctrl">
+  <div class="modes">
+    <button data-m="rem" class="on">Remendos</button>
+    <button data-m="umi">Umidade</button>
+    <button data-m="lin">Linhas</button>
+    <button data-m="ori">Original</button>
+  </div>
+  <div class="sl"><span>Intensidade</span><input type="range" id="k" min="1" max="12" step="0.5" value="5"></div>
+  <div class="sl"><span>Tamanho da faixa</span><input type="range" id="r" min="4" max="60" step="1" value="18"></div>
+  <div class="row"><button id="bCong">⏸ Congelar</button><button id="bSalvar">💾 Salvar</button><button id="bFoto2">🖼 Foto</button></div>
+</div>
+<input type="file" id="fFoto" accept="image/*">
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const out=$('out'),octx=out.getContext('2d');
+const work=document.createElement('canvas'),wctx=work.getContext('2d',{willReadFrequently:true});
+let mode='rem',frozen=false,src=null,stream=null,img=null;
+const NOMES={rem:'Remendos / contraste local',umi:'Umidade / manchas escuras',lin:'Linhas retas (trincas, bordas de remendo)',ori:'Imagem original'};
+
+function rampa(t){const st=[[0,0,0,0],[.35,84,84,84],[.7,249,161,54],[1,255,255,255]];
+  for(let i=1;i<st.length;i++)if(t<=st[i][0]){const a=st[i-1],b=st[i],u=(t-a[0])/(b[0]-a[0]);return [a[1]+u*(b[1]-a[1]),a[2]+u*(b[2]-a[2]),a[3]+u*(b[3]-a[3])]}return [255,255,255]}
+const LUT=[];for(let i=0;i<256;i++)LUT.push(rampa(i/255));
+
+function processa(source,sw,sh,maxW){
+  const W=Math.min(maxW,sw),H=Math.round(sh*W/sw);
+  if(work.width!==W||work.height!==H){work.width=W;work.height=H}
+  wctx.drawImage(source,0,0,W,H);
+  const id=wctx.getImageData(0,0,W,H),d=id.data,N=W*H;
+  if(mode==='ori'){return id}
+  const g=new Float32Array(N);for(let i=0,p=0;i<N;i++,p+=4)g[i]=0.299*d[p]+0.587*d[p+1]+0.114*d[p+2];
+  // média local por imagem integral
+  const R=Math.round(+$('r').value*W/360),W1=W+1,I=new Float64Array(W1*(H+1));
+  for(let y=0;y<H;y++){let s=0;for(let x=0;x<W;x++){s+=g[y*W+x];I[(y+1)*W1+x+1]=I[y*W1+x+1]+s}}
+  const m=new Float32Array(N);
+  for(let y=0;y<H;y++){const y0=Math.max(0,y-R),y1=Math.min(H,y+R+1);
+    for(let x=0;x<W;x++){const x0=Math.max(0,x-R),x1=Math.min(W,x+R+1);
+      m[y*W+x]=(I[y1*W1+x1]-I[y0*W1+x1]-I[y1*W1+x0]+I[y0*W1+x0])/((y1-y0)*(x1-x0))}}
+  const k=+$('k').value;
+  if(mode==='rem'){
+    for(let i=0,p=0;i<N;i++,p+=4){let v=128+(g[i]-m[i])*k;v=v<0?0:v>255?255:v;const c=LUT[v|0];d[p]=c[0];d[p+1]=c[1];d[p+2]=c[2]}
+  }else if(mode==='umi'){
+    for(let i=0,p=0;i<N;i++,p+=4){const e=(m[i]-g[i])*k*1.5;const base=g[i]*0.45;
+      if(e>8){const c=LUT[Math.min(255,e+80)|0];d[p]=c[0];d[p+1]=c[1];d[p+2]=c[2]}else{d[p]=d[p+1]=d[p+2]=base}}
+  }else if(mode==='lin'){
+    const h=new Float32Array(N);for(let i=0;i<N;i++)h[i]=g[i]-m[i];
+    const mag=new Float32Array(N);let mx=1;
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x;
+      const gx=h[i-W+1]+2*h[i+1]+h[i+W+1]-h[i-W-1]-2*h[i-1]-h[i+W-1];
+      const gy=h[i+W-1]+2*h[i+W]+h[i+W+1]-h[i-W-1]-2*h[i-W]-h[i-W+1];
+      const v=Math.hypot(gx,gy);mag[i]=v;if(v>mx)mx=v}
+    const th=mx*(0.55-k*0.035);
+    for(let i=0,p=0;i<N;i++,p+=4){const base=g[i]*0.5;
+      if(mag[i]>th){d[p]=249;d[p+1]=161;d[p+2]=54}else{d[p]=d[p+1]=d[p+2]=base}}
+  }
+  return id;
+}
+function desenhaSaida(id){
+  const dpr=devicePixelRatio||1,cw=out.clientWidth,ch=out.clientHeight;
+  if(out.width!==cw*dpr||out.height!==ch*dpr){out.width=cw*dpr;out.height=ch*dpr}
+  wctx.putImageData(id,0,0);
+  octx.setTransform(1,0,0,1,0,0);octx.fillStyle='#000';octx.fillRect(0,0,out.width,out.height);
+  const s=Math.min(out.width/work.width,out.height/work.height),w=work.width*s,h=work.height*s;
+  octx.imageSmoothingEnabled=true;octx.drawImage(work,(out.width-w)/2,(out.height-h)/2,w,h);
+  octx.font=`800 ${12*dpr}px Arial`;octx.fillStyle='rgba(249,161,54,.85)';octx.textAlign='right';
+  octx.fillText('RESUS ENGENHARIA',(out.width+w)/2-8*dpr,(out.height+h)/2-8*dpr);
+}
+function loop(){
+  if(src==='cam'&&!frozen){const v=$('vid');if(v.videoWidth)desenhaSaida(processa(v,v.videoWidth,v.videoHeight,360))}
+  requestAnimationFrame(loop);
+}
+function refazFoto(){if(src==='foto'&&img)desenhaSaida(processa(img,img.width,img.height,900))}
+
+$('bCam').onclick=async()=>{
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false})}
+  catch(e){$('bCam').textContent='Sem acesso à câmera — permita no navegador';return}
+  $('vid').srcObject=stream;src='cam';$('start').style.display='none';frozen=false;$('bCong').textContent='⏸ Congelar';
+};
+const abrirFoto=()=>$('fFoto').click();$('bFoto').onclick=abrirFoto;$('bFoto2').onclick=abrirFoto;
+$('fFoto').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image();im.onload=()=>{img=im;src='foto';$('start').style.display='none';refazFoto()};im.src=URL.createObjectURL(f);e.target.value=''};
+document.querySelectorAll('.modes button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;document.querySelectorAll('.modes button').forEach(x=>x.classList.toggle('on',x===b));$('info').textContent=NOMES[mode];
+  if(src==='foto')refazFoto();else if(frozen){frozen=false;requestAnimationFrame(()=>{frozen=true})}});
+['k','r'].forEach(id=>$(id).oninput=()=>{if(src==='foto')refazFoto();else if(frozen){frozen=false;requestAnimationFrame(()=>{frozen=true})}});
+$('bCong').onclick=()=>{if(src!=='cam')return;frozen=!frozen;$('bCong').textContent=frozen?'▶ Continuar':'⏸ Congelar'};
+$('bSalvar').onclick=()=>{out.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='realce_resus.png';document.body.appendChild(a);a.click();a.remove()})};
+addEventListener('resize',()=>{if(src==='foto')refazFoto()});
+loop();
+</script>
+</body>
+</html>
